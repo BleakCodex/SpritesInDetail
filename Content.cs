@@ -12,7 +12,7 @@ namespace SpritesInDetail
     public class Sprite
     {
         public string Target { get; set; }
-        public string FromFile { get; set; }
+        public string? FromFile { get; set; }
         public int? SpriteWidth { get; set; }
         public int? SpriteHeight { get; set; }
         public int? SpriteOriginX { get; set; }
@@ -31,6 +31,15 @@ namespace SpritesInDetail
 
         public Dictionary<string, string>? When { get; set; }
 
+        public List<PixelReplacement> PixelReplacements { get; set; } = new List<PixelReplacement>();
+
+    }
+
+    public class PixelReplacement
+    {
+        public int? TargetX { get; set; }
+        public int? TargetY { get; set; }
+        public string? FromFile { get; set; }
     }
 
     public enum BreathType

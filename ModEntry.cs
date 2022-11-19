@@ -7,6 +7,7 @@ using Netcode;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -67,6 +68,10 @@ namespace SpritesInDetail
             return false;
         }
 
+
+        List<Tuple<string, IManifest>> tokensToRegister = new List<Tuple<string, IManifest>>();
+
+
         public override void Entry(IModHelper helper)
         {
             var harmony = new Harmony(this.ModManifest.UniqueID);
@@ -75,6 +80,132 @@ namespace SpritesInDetail
             {
                 //Shotgun approach
                 harmony.Patch(typeof(SpriteBatch).GetMethod("Draw", method.GetParameters().Select(p => p.ParameterType).Where(t => !t.Name.Contains("SpriteBatch")).ToArray()), new HarmonyMethod(method));
+            }
+
+
+            foreach (IContentPack contentPack in this.Helper.ContentPacks.GetOwned())
+            {
+                Content? data = contentPack.ReadJsonFile<Content>("content.json");
+                dynamic? dynamicConfig = contentPack.ReadJsonFile<dynamic>("config.json");
+
+                Dictionary<string, string> contentPackSettings = new Dictionary<string, string>();
+
+                this.Monitor.Log($"Reading content pack: {contentPack.Manifest.Name} {contentPack.Manifest.Version} from {contentPack.DirectoryPath}");
+
+                if (!contentPack.HasFile("content.json"))
+                {
+                    this.Monitor.Log($"Missing content.json; No changes will be applied.", LogLevel.Error);
+                }
+                else
+                {
+                    Dictionary<string, object> config;
+                    if (dynamicConfig is null)
+                    {
+                        config = new Dictionary<string, object>();
+                        config.Add("Enabled", "true");
+                    }
+                    else
+                    {
+                        config = dynamicConfig.ToObject<Dictionary<string, object>>();
+                    }
+
+                    foreach (KeyValuePair<string, object> keyValue in config)
+                    {
+                        if (keyValue.Value is null)
+                        {
+                            continue;
+                        }
+
+                        contentPackSettings.Add(keyValue.Key, keyValue.Value.ToString() ?? string.Empty);
+
+                        if (keyValue.Key != "Enabled")
+                        {
+                            //Save a list of tokens we've registered, so that we can form the correct Conditional keys
+                            tokensToRegister.Add(new Tuple<string, IManifest>(keyValue.Key, contentPack.Manifest));
+                        }
+                    }
+
+                    if (data != null)
+                    {
+
+                        bool farmerWasReplaced = false;
+
+                        foreach (Sprite sprite in data.Sprites)
+                        {
+                            Dictionary<string, string?> conditionals = new Dictionary<string, string?>();
+                            if (sprite.When is not null)
+                            {
+                                foreach (var when in sprite.When)
+                                {
+                                    if (tokensToRegister.Any(t => t.Item1 == when.Key))
+                                    {
+                                        //Conditionals created from config values need to be accessed via the CP's uid.
+                                        conditionals.Add($"{contentPack.Manifest.UniqueID}/{when.Key}", when.Value);
+                                    }
+                                    else
+                                    {
+                                        conditionals.Add(when.Key, when.Value);
+                                        //For now, we'll mark any sprites which have a non-config When conditional to re-validate daily
+                                        spritesToInvalidateDaily.Add(sprite.Target);
+                                    }
+                                }
+                            }
+
+                            bool isFarmerTexture = false;
+                            if (sprite.Target.Contains("Farmer"))
+                            {
+                                isFarmerTexture = true;
+                                farmerWasReplaced = true;
+                            }
+
+                            this.Monitor.Log($"Found replacement sprite {sprite.Target} {sprite.FromFile} {sprite.SpriteWidth} {sprite.SpriteHeight}", LogLevel.Trace);
+
+                            Texture2D? textureFromFile = null;
+                            if (sprite.FromFile is not null)
+                            {
+                                textureFromFile = contentPack.ModContent.Load<Texture2D>(sprite.FromFile);
+                            }
+
+                            HDTextureInfo textureInfo = new HDTextureInfo(sprite, contentPack.Manifest, textureFromFile, conditionals, isFarmerTexture);
+
+                            for(int i = 0; i < sprite.PixelReplacements.Count; i++)
+                            {
+
+                                if (sprite.PixelReplacements[i].TargetX == null)
+                                {
+                                    this.Monitor.Log($"Missing TargetX for replacement {sprite.Target}.PixelReplacements[{i}], skipping...", LogLevel.Error);
+                                    continue;
+                                }
+                                if (sprite.PixelReplacements[i].TargetY == null)
+                                {
+                                    this.Monitor.Log($"Missing TargetY for replacement {sprite.Target}.PixelReplacements[{i}], skipping...", LogLevel.Error);
+                                    continue;
+                                }
+                                if (sprite.PixelReplacements[i].FromFile == null)
+                                {
+                                    this.Monitor.Log($"Missing FromFile for replacement {sprite.Target}.PixelReplacements[{i}], skipping...", LogLevel.Error);
+                                    continue;
+                                }
+
+                                textureInfo.PixelReplacements.Add(new Vector2((float)sprite.PixelReplacements[i].TargetX, (float)sprite.PixelReplacements[i].TargetY), contentPack.ModContent.Load<Texture2D>(sprite.PixelReplacements[i].FromFile));
+                            }
+
+                            hdTextures.Add(textureInfo);
+                        }
+
+                        //Only patch the default behavior if at least one farmer texture is being replaced
+                        if (farmerWasReplaced)
+                        {
+                            harmony.Patch(typeof(FarmerRenderer).GetMethod("textureChanged", BindingFlags.NonPublic | BindingFlags.Instance), new HarmonyMethod(typeof(ModEntry).GetMethod("textureChanged")));
+                            harmony.Patch(typeof(FarmerRenderer).GetMethod("_GeneratePixelIndices", BindingFlags.NonPublic | BindingFlags.Instance), new HarmonyMethod(typeof(ModEntry).GetMethod("_GeneratePixelIndices")));
+                        }
+                    }
+
+                    if (contentPackSettings.Count > 0)
+                    {
+                        settings.Add(contentPack.Manifest, contentPackSettings);
+                    }
+                }
             }
 
             //Handle daily Conditional checks
@@ -95,23 +226,26 @@ namespace SpritesInDetail
             }
         }
 
-        private Dictionary<IManifest, Dictionary<string, string>> settings = new Dictionary<IManifest, Dictionary<string, string>>();
+        public static Dictionary<IManifest, Dictionary<string, string>> settings = new Dictionary<IManifest, Dictionary<string, string>>();
         private void GameLoop_GameLaunched(object? sender, GameLaunchedEventArgs e)
         {
             var configMenuApi = this.Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
             var cpApi = this.Helper.ModRegistry.GetApi<IContentPatcherAPI>("Pathoschild.ContentPatcher");
 
+            foreach (Tuple<string, IManifest> tokenKeyToManifest in tokensToRegister)
+            {
+                cpApi.RegisterToken(tokenKeyToManifest.Item2, tokenKeyToManifest.Item1, () =>
+                {
+                    return new[] { settings[tokenKeyToManifest.Item2][tokenKeyToManifest.Item1] };
+                });
+            }
+
             foreach (IContentPack contentPack in this.Helper.ContentPacks.GetOwned())
             {
-                Dictionary<string, string> contentPackSettings = new Dictionary<string, string>();
 
                 this.Monitor.Log($"Reading content pack: {contentPack.Manifest.Name} {contentPack.Manifest.Version} from {contentPack.DirectoryPath}");
 
-                if (!contentPack.HasFile("content.json"))
-                {
-                    this.Monitor.Log($"Missing content.json; No changes will be applied.", LogLevel.Error);
-                }
-                else
+                if (contentPack.HasFile("content.json"))
                 {
                     Content? data = contentPack.ReadJsonFile<Content>("content.json");
                     dynamic? dynamicConfig = contentPack.ReadJsonFile<dynamic>("config.json");
@@ -132,88 +266,7 @@ namespace SpritesInDetail
                                 }
                             );
                         }
-
-                        Dictionary<string, object> config;
-                        if (dynamicConfig is null)
-                        {
-                            config = new Dictionary<string, object>();
-                            config.Add("Enabled", "true");
-                        } else
-                        {
-                            config = dynamicConfig.ToObject<Dictionary<string, object>>();
-                        }
-
-                        foreach (KeyValuePair<string, object> keyValue in config)
-                        {
-                            if (keyValue.Value is null)
-                            {
-                                continue;
-                            }
-
-                            contentPackSettings.Add(keyValue.Key, keyValue.Value.ToString() ?? string.Empty);
-
-                            if (keyValue.Key != "Enabled")
-                            {
-                                cpApi.RegisterToken(contentPack.Manifest, keyValue.Key, () =>
-                                {
-                                    return new[] { settings[contentPack.Manifest][keyValue.Key] };
-                                });
-                                //Save a list of tokens we've registered, so that we can form the correct Conditional keys
-                                tokens.Add(keyValue.Key);
-                            }
-                        }
-                        
                     }
-
-                    if (data != null)
-                    {
-
-                        bool farmerWasReplaced = false;
-
-                        foreach (Sprite sprite in data.Sprites)
-                        {
-                            Dictionary<string, string?> conditionals = new Dictionary<string, string?>();
-                            if (sprite.When is not null)
-                            {
-                                foreach (var when in sprite.When){
-                                    if (tokens.Contains(when.Key))
-                                    {
-                                        //Conditionals created from config values need to be accessed via the CP's uid.
-                                        conditionals.Add($"{contentPack.Manifest.UniqueID}/{when.Key}", when.Value);
-                                    } else
-                                    {
-                                        conditionals.Add(when.Key, when.Value);
-                                        //For now, we'll mark any sprites which have a non-config When conditional to re-validate daily
-                                        spritesToInvalidateDaily.Add(sprite.Target);
-                                    }
-                                }
-                            }
-
-                            bool isFarmerTexture = false;
-                            if (sprite.Target.Contains("Farmer"))
-                            {
-                                isFarmerTexture = true;
-                                farmerWasReplaced = true;
-                            }
-
-                            this.Monitor.Log($"Found replacement sprite {sprite.Target} {sprite.FromFile} {sprite.SpriteWidth} {sprite.SpriteHeight}", LogLevel.Trace);
-                            hdTextures.Add(new HDTextureInfo(sprite, contentPack.Manifest, contentPack.ModContent.Load<Texture2D>(sprite.FromFile), conditionals, isFarmerTexture));
-                        }
-
-                        //Only patch the default behavior if at least one farmer texture is being replaced
-                        if (farmerWasReplaced)
-                        {
-                            var harmony = new Harmony(this.ModManifest.UniqueID);
-                            harmony.Patch(typeof(FarmerRenderer).GetMethod("textureChanged", BindingFlags.NonPublic | BindingFlags.Instance), new HarmonyMethod(typeof(ModEntry).GetMethod("textureChanged")));
-                            harmony.Patch(typeof(FarmerRenderer).GetMethod("_GeneratePixelIndices", BindingFlags.NonPublic | BindingFlags.Instance), new HarmonyMethod(typeof(ModEntry).GetMethod("_GeneratePixelIndices")));
-                        }
-                    }
-
-                }
-
-                if (contentPackSettings.Count > 0)
-                {
-                    settings.Add(contentPack.Manifest, contentPackSettings);
                 }
             }
         }
@@ -293,7 +346,7 @@ namespace SpritesInDetail
                                 enabled = false;
                             }
                             
-                            if (enabled && info.Conditionals.Count > 0 && cpApi is not null)
+                            if (enabled && info.Conditionals.Count > 0 && cpApi is not null && cpApi.IsConditionsApiReady)
                             {
                                 IManagedConditions managedConditions = cpApi.ParseConditions(info.ContentPackManifest, info.Conditionals, new SemanticVersion("1.28.0"));
                                 enabled = managedConditions.IsMatch;
@@ -303,10 +356,20 @@ namespace SpritesInDetail
                             {
                                 ReplacedTexture replacement = new ReplacedTexture(asset.AsImage().Data, info.HDTexture, info);
 
-                                //Populate the texture's data. This is neccissary for SiD Farmer changes, though technically we may be able to skip for other sprites
-                                Color[] data = new Color[info.HDTexture.Width * info.HDTexture.Height];
-                                info.HDTexture.GetData(data, 0, data.Length);
-                                replacement.SetData(data);
+                                IAssetDataForImage assetImage = asset.AsImage();
+
+                                if (info.HDTexture is not null)
+                                {
+                                    //Populate the texture's data. This is neccissary for SiD Farmer changes, though technically we may be able to skip for other sprites
+                                    Color[] data = new Color[info.HDTexture.Width * info.HDTexture.Height];
+                                    info.HDTexture.GetData(data, 0, data.Length);
+                                    replacement.SetData(data);
+                                } else
+                                {
+                                    Color[] data = new Color[assetImage.Data.Width * assetImage.Data.Height];
+                                    assetImage.Data.GetData(data, 0, data.Length);
+                                    replacement.SetData(data);
+                                }
 
                                 this.Monitor.Log($"Replacing Texture for {info.Target}", LogLevel.Trace);
                                 asset.AsImage().ReplaceWith(replacement);
@@ -337,6 +400,27 @@ namespace SpritesInDetail
                 Rectangle? updatedSource;
                 Vector2 updatedOrigin;
 
+                if (a.HDTextureInfo.HDTexture is null)
+                {
+                    Vector2 currentSourceLocation = new Vector2(r.X, r.Y);
+                    if (a.HDTextureInfo.PixelReplacements.ContainsKey(currentSourceLocation))
+                    {
+                        Texture2D replacementTexture = a.HDTextureInfo.PixelReplacements[currentSourceLocation];
+
+                        //Replace the attempted render with the replaced value
+                        updatedOrigin = new Vector2(origin.X * (float)replacementTexture.Width / (float)r.Width, origin.Y * (float)replacementTexture.Height / (float)r.Height);
+
+                        spriteAlreadyDrawn = true;
+                        __instance.Draw(replacementTexture, destination, null, color, rotation, updatedOrigin, effects, layerDepth);
+                        spriteAlreadyDrawn = false;
+                        return false;
+                    }
+
+                    //Nothing to replace
+                    return true;
+                }
+
+
                 //Male/Female 'Breather' sprite
                 // These are textures drawn on top of the NPC's chest, and stretched, to appear as if they are breathing
                 if ((r.Width == 8 && r.Height == 8) || (r.Width == 8 && r.Height == 4))
@@ -349,31 +433,74 @@ namespace SpritesInDetail
                     updatedDestination = new Rectangle(destination.X + a.HDTextureInfo.ChestAdjustX, destination.Y + a.HDTextureInfo.ChestAdjustY, (int)(a.HDTextureInfo.ChestSourceWidth * scale.X / 2), (int)(a.HDTextureInfo.ChestSourceHeight * scale.Y / 2));
                     updatedSource = new Rectangle?(new Rectangle((int)(16 * a.HDTextureInfo.WidthScale * (r.X / 16)) + a.HDTextureInfo.ChestSourceX, (int)((32 * a.HDTextureInfo.HeightScale) * (r.Y / 32)) + a.HDTextureInfo.ChestSourceY, a.HDTextureInfo.ChestSourceWidth, a.HDTextureInfo.ChestSourceHeight));
                     updatedOrigin = new Vector2(a.HDTextureInfo.ChestSourceWidth / 2, a.HDTextureInfo.ChestSourceHeight / 2 + 1);
-                } else
+                }
+                else
                 {
                     //The destination is the X,Y coordinates of the Origin.
                     //Therefore, if you increase the width of the sprite, you have to make sure to update the origin, but don't need to alter the destination.
                     updatedDestination = new Rectangle(destination.X, destination.Y, (int)(a.HDTextureInfo.SpriteWidth * scale.X), (int)(a.HDTextureInfo.SpriteHeight * scale.Y));
+
+
                     updatedSource = new Rectangle?(new Rectangle((int)(r.X * a.HDTextureInfo.WidthScale), (int)(r.Y * a.HDTextureInfo.HeightScale), (int)(r.Width * a.HDTextureInfo.WidthScale), (int)(r.Height * a.HDTextureInfo.HeightScale)));
 
                     if (a.HDTextureInfo.IsFarmer && origin.X == 0 && origin.Y == 0)
                     {
-                        //Quick fix for Menu Rendering
-                        //TODO[LOW]: Figure out a way to allow the origin to be moved and still render correctly on the main menu.
-                        updatedOrigin = new Vector2(16, 64);
-                    } else {
-                        //The Origin of the sprite is in the lower center, lower 3/4s, and looks to be around where the upper-center of the shadow is drawn
-                        updatedOrigin = new Vector2(a.HDTextureInfo.SpriteOriginX, a.HDTextureInfo.SpriteOriginY);
+                        //Headshots
+                        if (r.Height == 15)
+                        {
+                            updatedDestination = destination;
+                            updatedSource = new Rectangle?(new Rectangle(16, 64, 32, 32));
+                            updatedOrigin = new Vector2(0, 0);
+                        }
+                        else if (r.Width == 6 && r.Height == 2)
+                        {   //Blink them lashes
+                            if (r.X == 5)
+                            {
+                                //Skin
+                                updatedSource = new Rectangle?(new Rectangle(26, 96, 12, 4));
+                                updatedDestination = destination;
+                            }
+                            else
+                            {
+                                //Eyes
+                                updatedSource = new Rectangle?(new Rectangle(r.X * 4, r.Y * 4, 24, 8));
+                                updatedDestination = destination;
+                            }
+                            updatedOrigin = new Vector2(0, 0);
+                        }
+                        else
+                        {
+                            //Quick fix for Menu Rendering
+                            //TODO[LOW]: Figure out a way to allow the origin to be moved and still render correctly on the main menu.
+                            updatedOrigin = new Vector2(16, 64);
+                        }
+
                     }
-                    
+                    else
+                    {
+                        //Social Tab
+                        if (r.Height == 24)
+                        {
+                            updatedDestination = new Rectangle(destination.X, destination.Y-80, (int)(a.HDTextureInfo.SpriteWidth * scale.X), (int)(a.HDTextureInfo.SpriteHeight * scale.Y)); ;
+                            updatedSource = new Rectangle?(new Rectangle(0, 0, 64, 110));
+                            updatedOrigin = new Vector2(32, 55);
+                        }
+                        else
+                        {
+                            //The Origin of the sprite is in the lower center, lower 3/4s, and looks to be around where the upper-center of the shadow is drawn
+                            updatedOrigin = new Vector2(a.HDTextureInfo.SpriteOriginX, a.HDTextureInfo.SpriteOriginY);
+                        }
+
+                    }
+                    spriteAlreadyDrawn = true;
+                    __instance.Draw(a, updatedDestination, updatedSource, color, rotation, updatedOrigin, effects, layerDepth);
+                    spriteAlreadyDrawn = false;
+                    return false;
                 }
-                spriteAlreadyDrawn = true;
-                __instance.Draw(a, updatedDestination, updatedSource, color, rotation, updatedOrigin, effects, layerDepth);
-                spriteAlreadyDrawn = false;
-                return false;
             }
 
             return true;
+            
         }
 
         public static bool Draw(SpriteBatch __instance, Texture2D texture, Rectangle destinationRectangle, Rectangle? sourceRectangle, Color color, float rotation, Vector2 origin, SpriteEffects effects, float layerDepth)
