@@ -1,4 +1,5 @@
-﻿using Microsoft.Xna.Framework.Graphics;
+﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using System;
 using System.Collections.Generic;
@@ -12,7 +13,7 @@ namespace SpritesInDetail
     {
         public bool Enabled { get; set; }
         public string Target { get; set; }
-        public Texture2D HDTexture { get; set; }
+        public Texture2D? HDTexture { get; set; }
 
 
         public int SpriteWidth { get; set; }
@@ -38,7 +39,9 @@ namespace SpritesInDetail
         public IManifest ContentPackManifest { get; set; }
         public Dictionary<string, string?> Conditionals { get; set; } = new Dictionary<string, string?>();
 
-        public HDTextureInfo(Sprite sprite, IManifest contentPackManifest, Texture2D hdTexture, Dictionary<string, string?> conditionals, bool isFarmer = false)
+        public Dictionary<Vector2, Texture2D> PixelReplacements { get; set; } = new Dictionary<Vector2, Texture2D>();
+
+        public HDTextureInfo(Sprite sprite, IManifest contentPackManifest, Texture2D? hdTexture, Dictionary<string, string?> conditionals, bool isFarmer = false)
         {
             ContentPackManifest = contentPackManifest;
 

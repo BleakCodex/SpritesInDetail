@@ -1,7 +1,7 @@
 ﻿{
   "Name": "SpritesInDetail",
   "Author": "BleakCodex",
-  "Version": "0.2.0",
+  "Version": "0.3.0",
   "Description": "Higher pixel sprites",
   "UniqueID": "BleakCodex.SpritesInDetail",
   "EntryDll": "SpritesInDetail.dll",
