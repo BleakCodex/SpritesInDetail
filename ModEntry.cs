@@ -354,21 +354,31 @@ namespace SpritesInDetail
 
                             if (enabled)
                             {
-                                ReplacedTexture replacement = new ReplacedTexture(asset.AsImage().Data, info.HDTexture, info);
+                                ReplacedTexture replacement;
 
-                                IAssetDataForImage assetImage = asset.AsImage();
-
-                                if (info.HDTexture is not null)
+                                if (info.Target.Contains("Farmer"))
                                 {
+                                    replacement = new ReplacedTexture(asset.AsImage().Data, info.HDTexture, info, info.HDTexture.Width, info.HDTexture.Height);
+                                    IAssetDataForImage assetImage = asset.AsImage();
+
                                     //Populate the texture's data. This is neccissary for SiD Farmer changes, though technically we may be able to skip for other sprites
                                     Color[] data = new Color[info.HDTexture.Width * info.HDTexture.Height];
                                     info.HDTexture.GetData(data, 0, data.Length);
                                     replacement.SetData(data);
-                                } else
+                                    
+                                }
+                                else if (info.PixelReplacements.Count > 0)
                                 {
+                                    replacement = new ReplacedTexture(asset.AsImage().Data, info.HDTexture, info);
+                                    IAssetDataForImage assetImage = asset.AsImage();
+
                                     Color[] data = new Color[assetImage.Data.Width * assetImage.Data.Height];
                                     assetImage.Data.GetData(data, 0, data.Length);
                                     replacement.SetData(data);
+                                }
+                                else
+                                {
+                                    replacement = new ReplacedTexture(asset.AsImage().Data, info.HDTexture, info);
                                 }
 
                                 this.Monitor.Log($"Replacing Texture for {info.Target}", LogLevel.Trace);
@@ -439,61 +449,79 @@ namespace SpritesInDetail
                     //The destination is the X,Y coordinates of the Origin.
                     //Therefore, if you increase the width of the sprite, you have to make sure to update the origin, but don't need to alter the destination.
                     updatedDestination = new Rectangle(destination.X, destination.Y, (int)(a.HDTextureInfo.SpriteWidth * scale.X), (int)(a.HDTextureInfo.SpriteHeight * scale.Y));
-
-
                     updatedSource = new Rectangle?(new Rectangle((int)(r.X * a.HDTextureInfo.WidthScale), (int)(r.Y * a.HDTextureInfo.HeightScale), (int)(r.Width * a.HDTextureInfo.WidthScale), (int)(r.Height * a.HDTextureInfo.HeightScale)));
 
-                    if (a.HDTextureInfo.IsFarmer && origin.X == 0 && origin.Y == 0)
+                    //The Origin of the sprite is in the lower center, lower 3/4s, and looks to be around where the upper-center of the shadow is drawn
+                    updatedOrigin = new Vector2(a.HDTextureInfo.SpriteOriginX, a.HDTextureInfo.SpriteOriginY);
+                    
+                    if (a.HDTextureInfo.IsFarmer)
                     {
-                        //Headshots
-                        if (r.Height == 15)
+                        if (origin.X == 0 && origin.Y == 0)
                         {
-                            updatedDestination = destination;
-                            updatedSource = new Rectangle?(new Rectangle(16, 64, 32, 32));
-                            updatedOrigin = new Vector2(0, 0);
-                        }
-                        else if (r.Width == 6 && r.Height == 2)
-                        {   //Blink them lashes
-                            if (r.X == 5)
+                            //Headshots
+                            if (r.Height == 15)
                             {
-                                //Skin
-                                updatedSource = new Rectangle?(new Rectangle(26, 96, 12, 4));
                                 updatedDestination = destination;
+                                updatedSource = new Rectangle?(new Rectangle(16, 64, 32, 32));
+                                updatedOrigin = new Vector2(0, 0);
+                            }
+                            else if (r.Width == 6 && r.Height == 2)
+                            {   //Blink them lashes
+                                if (r.X == 5)
+                                {
+                                    //Skin
+                                    updatedSource = new Rectangle?(new Rectangle(26, 96, 12, 4));
+                                    updatedDestination = destination;
+                                }
+                                else
+                                {
+                                    //Eyes
+                                    updatedSource = new Rectangle?(new Rectangle(r.X * 4, r.Y * 4, 24, 8));
+                                    updatedDestination = destination;
+                                }
+                                updatedOrigin = new Vector2(0, 0);
                             }
                             else
                             {
-                                //Eyes
-                                updatedSource = new Rectangle?(new Rectangle(r.X * 4, r.Y * 4, 24, 8));
-                                updatedDestination = destination;
+                                //Quick fix for Menu Rendering
+                                //TODO[LOW]: Figure out a way to allow the origin to be moved and still render correctly on the main menu.
+                                updatedOrigin = new Vector2(16, 64);
                             }
-                            updatedOrigin = new Vector2(0, 0);
                         }
-                        else
+                        else if (origin.X == 0 && origin.Y == 20)
                         {
-                            //Quick fix for Menu Rendering
-                            //TODO[LOW]: Figure out a way to allow the origin to be moved and still render correctly on the main menu.
-                            updatedOrigin = new Vector2(16, 64);
+                            //Rest awhile and listen down
+                            updatedOrigin = new Vector2(16, 103);
                         }
-
-                    }
-                    else
-                    {
+                        else if (origin.X == -4 && origin.Y == 24)
+                        {
+                            //Rest awhile and listen right
+                            updatedOrigin = new Vector2(9, 111);
+                        }
+                        else if (origin.X == 4 && origin.Y == 24)
+                        {
+                            //Rest awhile and listen left
+                            updatedOrigin = new Vector2(23, 111);
+                        }
+                        else if (origin.X == 0 && origin.Y == 22)
+                        {
+                            //Rest awhile and listen up
+                            updatedOrigin = new Vector2(16, 107);
+                        }
+                    } else if (r.Height == 24) {
                         //Social Tab
-                        if (r.Height == 24)
-                        {
-                            updatedDestination = new Rectangle(destination.X, destination.Y-80, (int)(a.HDTextureInfo.SpriteWidth * scale.X), (int)(a.HDTextureInfo.SpriteHeight * scale.Y)); ;
-                            updatedSource = new Rectangle?(new Rectangle(0, 0, 64, 110));
-                            updatedOrigin = new Vector2(32, 55);
-                        }
-                        else
-                        {
-                            //The Origin of the sprite is in the lower center, lower 3/4s, and looks to be around where the upper-center of the shadow is drawn
-                            updatedOrigin = new Vector2(a.HDTextureInfo.SpriteOriginX, a.HDTextureInfo.SpriteOriginY);
-                        }
-
+                        updatedDestination = new Rectangle(destination.X, destination.Y - 80, (int)(a.HDTextureInfo.SpriteWidth * scale.X), (int)(a.HDTextureInfo.SpriteHeight * scale.Y)); ;
+                        updatedSource = new Rectangle?(new Rectangle(0, 0, 64, 110));
+                        updatedOrigin = new Vector2(32, 55);
                     }
                     spriteAlreadyDrawn = true;
-                    __instance.Draw(a, updatedDestination, updatedSource, color, rotation, updatedOrigin, effects, layerDepth);
+                    if (a.HDTextureInfo.IsFarmer)
+                    {
+                        __instance.Draw(a, updatedDestination, updatedSource, color, rotation, updatedOrigin, effects, layerDepth);
+                    } else
+                    {
+                        __instance.Draw(a.NewTexture, updatedDestination, updatedSource, color, rotation, updatedOrigin, effects, layerDepth);
+                    }
                     spriteAlreadyDrawn = false;
                     return false;
                 }

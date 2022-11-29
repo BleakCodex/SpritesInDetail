@@ -9,8 +9,8 @@ namespace SpritesInDetail
 
         public HDTextureInfo HDTextureInfo {get; set;}
         
-        public ReplacedTexture(Texture2D originalTexture, Texture2D? newTexture, HDTextureInfo hdTextureInfo) 
-            : base(originalTexture.GraphicsDevice, newTexture is not null ? newTexture.Width : originalTexture.Width, newTexture is not null ? newTexture.Height : originalTexture.Height)
+        public ReplacedTexture(Texture2D originalTexture, Texture2D? newTexture, HDTextureInfo hdTextureInfo, int? width = null, int? height = null) 
+            : base(originalTexture.GraphicsDevice, width ?? originalTexture.Width, height ?? originalTexture.Height)
         {
             this.OriginalTexture = originalTexture;
             this.NewTexture = newTexture;
